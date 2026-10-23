@@ -3,9 +3,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
 
-public class MedicalLabAnalyzer {
+public class MainActivity {
 
-    // معلومات كل تحليل طبي
     static class LabTestInfo {
         double min;
         double max;
@@ -21,37 +20,35 @@ public class MedicalLabAnalyzer {
         }
     }
 
-    // قاعدة بيانات التحاليل
     private static final Map<String, LabTestInfo> database =
             new HashMap<>();
 
     static {
-        LabTestInfo glucose = new LabTestInfo(
-                70, 99, "mg/dL", "السكر الصائم (Glucose)");
+        database.put("GLUCOSE",
+                new LabTestInfo(70, 99, "mg/dL",
+                        "السكر الصائم (Glucose)"));
 
-        LabTestInfo hb = new LabTestInfo(
-                12, 16, "g/dL", "الهيموغلوبين (Hemoglobin)");
-
-        LabTestInfo wbc = new LabTestInfo(
-                4000, 11000, "/uL", "كريات الدم البيضاء (WBC)");
-
-        LabTestInfo creatinine = new LabTestInfo(
-                0.6, 1.2, "mg/dL", "الكرياتينين (Creatinine)");
-
-        database.put("GLUCOSE", glucose);
+        LabTestInfo hb = new LabTestInfo(12, 16, "g/dL",
+                "الهيموغلوبين (Hemoglobin)");
         database.put("HB", hb);
         database.put("HEMOGLOBIN", hb);
-        database.put("WBC", wbc);
-        database.put("CREATININE", creatinine);
+
+        database.put("WBC",
+                new LabTestInfo(4000, 11000, "/uL",
+                        "كريات الدم البيضاء (WBC)"));
+
+        database.put("CREATININE",
+                new LabTestInfo(0.6, 1.2, "mg/dL",
+                        "الكرياتينين (Creatinine)"));
     }
 
     public static void main(String[] args) {
 
         Scanner scanner = new Scanner(System.in);
 
-        System.out.println("========================================");
+        System.out.println("==================================");
         System.out.println("   نظام قارئ التحاليل الطبية");
-        System.out.println("========================================");
+        System.out.println("==================================");
 
         while (true) {
 
@@ -70,8 +67,7 @@ public class MedicalLabAnalyzer {
             LabTestInfo info = database.get(testName);
 
             if (info == null) {
-                System.out.println(
-                    "خطأ: هذا التحليل غير موجود في قاعدة البيانات.");
+                System.out.println("التحليل غير موجود.");
                 continue;
             }
 
@@ -83,15 +79,14 @@ public class MedicalLabAnalyzer {
             try {
                 value = Double.parseDouble(input);
             } catch (NumberFormatException e) {
-                System.out.println(
-                    "خطأ: أدخل رقماً صحيحاً أو عشرياً، مثل 95 أو 95.5.");
+                System.out.println("خطأ: أدخل رقماً صحيحاً أو عشرياً.");
                 continue;
             }
 
-            if (Double.isNaN(value) || Double.isInfinite(value)
+            if (Double.isNaN(value)
+                    || Double.isInfinite(value)
                     || value < 0) {
-                System.out.println(
-                    "خطأ: أدخل قيمة رقمية موجبة أو صفراً.");
+                System.out.println("خطأ: أدخل قيمة موجبة أو صفراً.");
                 continue;
             }
 
@@ -101,15 +96,15 @@ public class MedicalLabAnalyzer {
         scanner.close();
     }
 
-    // تحليل النتيجة وعرض التقرير
     public static void analyzeAndPrintResult(
             LabTestInfo info, double value) {
 
-        System.out.println("\n========== تقرير التحليل ==========");
+        System.out.println("\n======= تقرير التحليل =======");
         System.out.println("اسم الفحص: " + info.arabicName);
         System.out.println("النتيجة: " + value + " " + info.unit);
-        System.out.println("المدى المرجعي المستخدم: "
-                + info.min + " - " + info.max + " " + info.unit);
+        System.out.println("المدى المرجعي: "
+                + info.min + " - " + info.max
+                + " " + info.unit);
 
         if (value < info.min) {
             System.out.println("التصنيف: أقل من المدى المرجعي");
@@ -120,8 +115,9 @@ public class MedicalLabAnalyzer {
         }
 
         System.out.println(
-            "ملاحظة: يجب تفسير النتيجة وفق مرجع المختبر "
-            + "والحالة الصحية بواسطة مختص.");
-        System.out.println("====================================");
+                "ملاحظة: تُفسر النتيجة حسب مرجع المختبر "
+                + "والحالة الصحية بواسطة مختص.");
+
+        System.out.println("==============================");
     }
 }
