@@ -1,123 +1,717 @@
+package com.medix.labanalyzer;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Scanner;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ContentValues;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
 
-public class MainActivity {
+import java.io.OutputStream;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Locale;
 
-    static class LabTestInfo {
-        double min;
-        double max;
-        String unit;
-        String arabicName;
+/**
+ * لوحة رسم بسيطة — قالب KlencodIDE
+ *
+ * الميزات:
+ *   - رسم بالإصبع (Canvas + Path)
+ *   - 8 ألوان
+ *   - 3 سماكات فرشاة
+ *   - تراجع (Undo)
+ *   - مسح الكل
+ *   - حفظ PNG في Pictures/KlencodDrawings (Android 10+)
+ *
+ * © 2026 KlencodIDE
+ */
+public class MainActivity extends Activity {
 
-        public LabTestInfo(double min, double max,
-                           String unit, String arabicName) {
-            this.min = min;
-            this.max = max;
-            this.unit = unit;
-            this.arabicName = arabicName;
+    // ============================================================
+    // الألوان الأساسية (نفس ألوان KlencodIDE)
+    // ============================================================
+    private static final int COLOR_BG = 0xFF0D1117;
+    private static final int COLOR_SURFACE = 0xFF161B22;
+    private static final int COLOR_SURFACE_ALT = 0xFF21262D;
+    private static final int COLOR_PRIMARY = 0xFF1F6FEB;
+    private static final int COLOR_PRIMARY_LIGHT = 0xFF58A6FF;
+    private static final int COLOR_TEXT = 0xFFE6EDF3;
+    private static final int COLOR_MUTED = 0xFF8B949E;
+    private static final int COLOR_BORDER = 0xFF30363D;
+
+    // 8 ألوان للرسم
+    private static final int[] PALETTE = {
+            0xFFFFFFFF, // أبيض
+            0xFF000000, // أسود
+            0xFFFF7B72, // أحمر
+            0xFF7EE787, // أخضر
+            0xFF58A6FF, // أزرق
+            0xFFD2A8FF, // بنفسجي
+            0xFFFFD33D, // أصفر
+            0xFFFF9E64  // برتقالي
+    };
+
+    // 3 سماكات
+    private static final float[] BRUSH_SIZES = {4f, 10f, 22f};
+
+    // ============================================================
+    // الحالة
+    // ============================================================
+    private DrawingView drawingView;
+    private int currentColorIndex = 2;  // أحمر افتراضي
+    private int currentSizeIndex = 1;   // متوسط افتراضي
+    private final ArrayList<Button> colorButtons = new ArrayList<>();
+    private final ArrayList<Button> sizeButtons = new ArrayList<>();
+
+    // ============================================================
+    // dp helper
+    // ============================================================
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    // ============================================================
+    // onCreate
+    // ============================================================
+    @Override
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
+
+        getWindow().setStatusBarColor(COLOR_BG);
+        getWindow().setNavigationBarColor(COLOR_BG);
+
+        // Root
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(COLOR_BG);
+
+        // ============================================================
+        // الترويسة العلوية
+        // ============================================================
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(14), dp(10), dp(14), dp(10));
+        header.setBackgroundColor(COLOR_SURFACE);
+
+        TextView title = new TextView(this);
+        title.setText("🎨 لوحة الرسم");
+        title.setTextColor(COLOR_TEXT);
+        title.setTextSize(17);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        Button undoBtn = makeTopButton("↶ تراجع");
+        undoBtn.setOnClickListener(v -> drawingView.undo());
+        header.addView(undoBtn, new LinearLayout.LayoutParams(-2, dp(40)));
+
+        Button clearBtn = makeTopButton("🗑 مسح");
+        clearBtn.setOnClickListener(v -> confirmClear());
+        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(-2, dp(40));
+        clearParams.leftMargin = dp(6);
+        header.addView(clearBtn, clearParams);
+
+        root.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        // ============================================================
+        // منطقة الرسم
+        // ============================================================
+        FrameLayout drawContainer = new FrameLayout(this);
+        drawContainer.setBackgroundColor(Color.WHITE);
+
+        drawingView = new DrawingView(this);
+        drawContainer.addView(drawingView, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout.LayoutParams drawParams = new LinearLayout.LayoutParams(-1, 0, 1f);
+        drawParams.setMargins(dp(12), dp(12), dp(12), dp(12));
+        root.addView(drawContainer, drawParams);
+
+        // ============================================================
+        // شريط التحكم السفلي
+        // ============================================================
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.VERTICAL);
+        controls.setPadding(dp(12), dp(10), dp(12), dp(12));
+        controls.setBackgroundColor(COLOR_SURFACE);
+
+        // --- صف الألوان ---
+        TextView colorLabel = new TextView(this);
+        colorLabel.setText("اللون:");
+        colorLabel.setTextColor(COLOR_MUTED);
+        colorLabel.setTextSize(12);
+        controls.addView(colorLabel);
+
+        LinearLayout colorRow = new LinearLayout(this);
+        colorRow.setOrientation(LinearLayout.HORIZONTAL);
+        colorRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams colorRowParams = new LinearLayout.LayoutParams(-1, dp(50));
+        colorRowParams.topMargin = dp(6);
+        controls.addView(colorRow, colorRowParams);
+
+        for (int i = 0; i < PALETTE.length; i++) {
+            final int index = i;
+            Button colorBtn = new Button(this);
+            colorBtn.setBackground(makeCircleDrawable(PALETTE[i]));
+            colorBtn.setPadding(0, 0, 0, 0);
+            colorBtn.setOnClickListener(v -> selectColor(index));
+
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, dp(40), 1f);
+            cp.setMargins(dp(3), 0, dp(3), 0);
+            colorRow.addView(colorBtn, cp);
+            colorButtons.add(colorBtn);
+        }
+
+        // --- صف السماكات ---
+        TextView sizeLabel = new TextView(this);
+        sizeLabel.setText("سماكة الفرشاة:");
+        sizeLabel.setTextColor(COLOR_MUTED);
+        sizeLabel.setTextSize(12);
+        LinearLayout.LayoutParams sizeLabelParams = new LinearLayout.LayoutParams(-1, -2);
+        sizeLabelParams.topMargin = dp(12);
+        controls.addView(sizeLabel, sizeLabelParams);
+
+        LinearLayout sizeRow = new LinearLayout(this);
+        sizeRow.setOrientation(LinearLayout.HORIZONTAL);
+        sizeRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams sizeRowParams = new LinearLayout.LayoutParams(-1, dp(46));
+        sizeRowParams.topMargin = dp(6);
+        controls.addView(sizeRow, sizeRowParams);
+
+        String[] sizeNames = {"رفيع", "متوسط", "عريض"};
+        for (int i = 0; i < BRUSH_SIZES.length; i++) {
+            final int index = i;
+            Button sizeBtn = new Button(this);
+            sizeBtn.setText(sizeNames[i]);
+            sizeBtn.setTextSize(12);
+            sizeBtn.setAllCaps(false);
+            sizeBtn.setPadding(0, 0, 0, 0);
+            sizeBtn.setOnClickListener(v -> selectSize(index));
+
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, dp(42), 1f);
+            sp.setMargins(dp(4), 0, dp(4), 0);
+            sizeRow.addView(sizeBtn, sp);
+            sizeButtons.add(sizeBtn);
+        }
+
+        // --- صف الحفظ ---
+        Button saveBtn = new Button(this);
+        saveBtn.setText("💾 حفظ الصورة");
+        saveBtn.setTextSize(14);
+        saveBtn.setAllCaps(false);
+        saveBtn.setTextColor(Color.WHITE);
+        saveBtn.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        GradientDrawable saveBg = new GradientDrawable();
+        saveBg.setColor(0xFF238636);
+        saveBg.setCornerRadius(dp(12));
+        saveBg.setStroke(dp(1), 0xFF56D364);
+        saveBtn.setBackground(saveBg);
+        saveBtn.setElevation(dp(2));
+        saveBtn.setOnClickListener(v -> saveImage());
+
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(-1, dp(50));
+        saveParams.topMargin = dp(14);
+        controls.addView(saveBtn, saveParams);
+
+        root.addView(controls, new LinearLayout.LayoutParams(-1, -2));
+
+        setContentView(root);
+
+        // الاختيارات الافتراضية
+        selectColor(currentColorIndex);
+        selectSize(currentSizeIndex);
+    }
+
+    // ============================================================
+    // دوال مساعدة للواجهة
+    // ============================================================
+    private Button makeTopButton(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextSize(12);
+        btn.setAllCaps(false);
+        btn.setTextColor(COLOR_TEXT);
+        btn.setPadding(dp(12), 0, dp(12), 0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(COLOR_SURFACE_ALT);
+        bg.setCornerRadius(dp(10));
+        bg.setStroke(dp(1), COLOR_BORDER);
+        btn.setBackground(bg);
+        return btn;
+    }
+
+    private GradientDrawable makeCircleDrawable(int color) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(color);
+        d.setStroke(dp(2), COLOR_BORDER);
+        return d;
+    }
+
+    private GradientDrawable makeSelectedCircleDrawable(int color) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(color);
+        d.setStroke(dp(3), COLOR_PRIMARY_LIGHT);
+        return d;
+    }
+
+    private GradientDrawable makeSizeButtonDrawable(boolean selected) {
+        GradientDrawable d = new GradientDrawable();
+        d.setCornerRadius(dp(10));
+        d.setColor(selected ? COLOR_PRIMARY : COLOR_SURFACE_ALT);
+        d.setStroke(dp(1), selected ? COLOR_PRIMARY_LIGHT : COLOR_BORDER);
+        return d;
+    }
+
+    private void selectColor(int index) {
+        currentColorIndex = index;
+        drawingView.setColor(PALETTE[index]);
+
+        for (int i = 0; i < colorButtons.size(); i++) {
+            Button b = colorButtons.get(i);
+            if (i == index) {
+                b.setBackground(makeSelectedCircleDrawable(PALETTE[i]));
+            } else {
+                b.setBackground(makeCircleDrawable(PALETTE[i]));
+            }
         }
     }
 
-    private static final Map<String, LabTestInfo> database =
-            new HashMap<>();
+    private void selectSize(int index) {
+        currentSizeIndex = index;
+        drawingView.setStrokeWidth(BRUSH_SIZES[index]);
 
-    static {
-        database.put("GLUCOSE",
-                new LabTestInfo(70, 99, "mg/dL",
-                        "السكر الصائم (Glucose)"));
-
-        LabTestInfo hb = new LabTestInfo(12, 16, "g/dL",
-                "الهيموغلوبين (Hemoglobin)");
-        database.put("HB", hb);
-        database.put("HEMOGLOBIN", hb);
-
-        database.put("WBC",
-                new LabTestInfo(4000, 11000, "/uL",
-                        "كريات الدم البيضاء (WBC)"));
-
-        database.put("CREATININE",
-                new LabTestInfo(0.6, 1.2, "mg/dL",
-                        "الكرياتينين (Creatinine)"));
+        for (int i = 0; i < sizeButtons.size(); i++) {
+            Button b = sizeButtons.get(i);
+            b.setBackground(makeSizeButtonDrawable(i == index));
+            b.setTextColor(i == index ? Color.WHITE : COLOR_TEXT);
+        }
     }
 
-    public static void main(String[] args) {
-
-        Scanner scanner = new Scanner(System.in);
-
-        System.out.println("==================================");
-        System.out.println("   نظام قارئ التحاليل الطبية");
-        System.out.println("==================================");
-
-        while (true) {
-
-            System.out.println("\nالتحاليل المتاحة:");
-            System.out.println("GLUCOSE - HB - WBC - CREATININE");
-            System.out.print("أدخل اسم التحليل أو EXIT للخروج: ");
-
-            String testName = scanner.nextLine()
-                    .trim().toUpperCase();
-
-            if (testName.equals("EXIT")) {
-                System.out.println("شكراً لاستخدام البرنامج!");
-                break;
+    // ============================================================
+    // حفظ الصورة
+    // ============================================================
+    private void saveImage() {
+        try {
+            Bitmap bitmap = drawingView.exportBitmap();
+            if (bitmap == null) {
+                Toast.makeText(this, "لا يوجد شيء لحفظه", Toast.LENGTH_SHORT).show();
+                return;
             }
 
-            LabTestInfo info = database.get(testName);
+            String timestamp = new SimpleDateFormat(
+                    "yyyyMMdd_HHmmss", Locale.US).format(new Date());
+            String fileName = "drawing_" + timestamp + ".png";
 
-            if (info == null) {
-                System.out.println("التحليل غير موجود.");
-                continue;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName);
+                values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+                values.put(MediaStore.Images.Media.RELATIVE_PATH,
+                        Environment.DIRECTORY_PICTURES + "/KlencodDrawings");
+
+                Uri uri = getContentResolver().insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+
+                if (uri == null) {
+                    Toast.makeText(this, "تعذر إنشاء ملف", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                OutputStream out = getContentResolver().openOutputStream(uri);
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+                if (out != null) out.close();
+                bitmap.recycle();
+
+                Toast.makeText(this,
+                        "✅ تم حفظ الصورة في:\nPictures/KlencodDrawings/" + fileName,
+                        Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(this,
+                        "يحتاج Android 10+ للحفظ",
+                        Toast.LENGTH_LONG).show();
             }
+        } catch (Exception e) {
+            Toast.makeText(this, "خطأ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
 
-            System.out.print("أدخل نتيجة التحليل: ");
-            String input = scanner.nextLine().trim();
+    private void confirmClear() {
+        new AlertDialog.Builder(this)
+                .setTitle("مسح اللوحة")
+                .setMessage("هل أنت متأكد من مسح كل الرسم؟")
+                .setPositiveButton("مسح", (d, w) -> drawingView.clear())
+                .setNegativeButton("إلغاء", null)
+                .show();
+    }
 
-            double value;
+    // ============================================================
+    // DrawingView — Canvas مخصص
+    // ============================================================
+    private static class DrawingView extends View {
 
-            try {
-                value = Double.parseDouble(input);
-            } catch (NumberFormatException e) {
-                System.out.println("خطأ: أدخل رقماً صحيحاً أو عشرياً.");
-                continue;
-            }
+        private final ArrayList<Stroke> strokes = new ArrayList<>();
+        private Stroke currentStroke;
 
-            if (Double.isNaN(value)
-                    || Double.isInfinite(value)
-                    || value < 0) {
-                System.out.println("خطأ: أدخل قيمة موجبة أو صفراً.");
-                continue;
-            }
+        private int currentColor = Color.RED;
+        private float currentStrokeWidth = 10f;
 
-            analyzeAndPrintResult(info, value);
+        public DrawingView(Activity context) {
+            super(context);
+            setFocusable(true);
+            setBackgroundColor(Color.WHITE);
         }
 
-        scanner.close();
+        public void setColor(int color) {
+            this.currentColor = color;
+        }
+
+        public void setStrokeWidth(float width) {
+            this.currentStrokeWidth = width;
+        }
+
+        public void clear() {
+            strokes.clear();
+            currentStroke = null;
+            invalidate();
+        }
+
+        public void undo() {
+            if (strokes.isEmpty()) return;
+            strokes.remove(strokes.size() - 1);
+            invalidate();
+        }
+
+        public Bitmap exportBitmap() {
+            if (getWidth() <= 0 || getHeight() <= 0) return null;
+            Bitmap bmp = Bitmap.createBitmap(
+                    getWidth(), getHeight(), Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bmp);
+            canvas.drawColor(Color.WHITE);
+
+            for (Stroke stroke : strokes) {
+                stroke.draw(canvas);
+            }
+            if (currentStroke != null) {
+                currentStroke.draw(canvas);
+            }
+            return bmp;
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+
+            for (Stroke stroke : strokes) {
+                stroke.draw(canvas);
+            }
+
+            if (currentStroke != null) {
+                currentStroke.draw(canvas);
+            }
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            float x = event.getX();
+            float y = event.getY();
+
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    currentStroke = new Stroke(currentColor, currentStrokeWidth);
+                    currentStroke.addPoint(x, y);
+                    invalidate();
+                    return true;
+
+                case MotionEvent.ACTION_MOVE:
+                    if (currentStroke != null) {
+                        currentStroke.addPoint(x, y);
+                        invalidate();
+                    }
+                    return true;
+
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (currentStroke != null) {
+                        strokes.add(currentStroke);
+                        currentStroke = null;
+                        invalidate();
+                    }
+                    return true;
+            }
+            return super.onTouchEvent(event);
+        }
     }
 
-    public static void analyzeAndPrintResult(
-            LabTestInfo info, double value) {
+    // ============================================================
+    // Stroke — ضربة واحدة (مسار واحد)
+    // ============================================================
+    private static class Stroke {
 
-        System.out.println("\n======= تقرير التحليل =======");
-        System.out.println("اسم الفحص: " + info.arabicName);
-        System.out.println("النتيجة: " + value + " " + info.unit);
-        System.out.println("المدى المرجعي: "
-                + info.min + " - " + info.max
-                + " " + info.unit);
+        private final Paint paint;
+        private final Path path;
 
-        if (value < info.min) {
-            System.out.println("التصنيف: أقل من المدى المرجعي");
-        } else if (value > info.max) {
-            System.out.println("التصنيف: أعلى من المدى المرجعي");
+        public Stroke(int color, float strokeWidth) {
+            paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(strokeWidth);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setDither(true);
+
+            path = new Path();
+        }
+
+        public void addPoint(float x, float y) {
+            if (path.isEmpty()) {
+                path.moveTo(x, y);
+            } else {
+                path.lineTo(x, y);
+            }
+        }
+
+        public void draw(Canvas canvas) {
+            canvas.drawPath(path, paint);
+        }
+    }
+}
+
+package com.medix.labanalyzer;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.graphics.Color;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.util.Locale;
+
+public class MainActivity extends Activity {
+
+    private Spinner testSpinner;
+    private EditText resultInput;
+    private TextView reportText;
+
+    private final String[] testNames = {
+        "السكر الصائم (GLUCOSE)",
+        "الهيموغلوبين (HB)",
+        "كريات الدم البيضاء (WBC)",
+        "الكرياتينين (CREATININE)"
+    };
+
+    private final double[] minimum = {70, 12, 4000, 0.6};
+    private final double[] maximum = {99, 16, 11000, 1.2};
+
+    private final String[] units = {
+        "mg/dL", "g/dL", "/uL", "mg/dL"
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        createInterface();
+    }
+
+    private void createInterface() {
+
+        int backgroundColor = Color.rgb(245, 248, 250);
+        int blueColor = Color.rgb(20, 100, 180);
+        int darkColor = Color.rgb(30, 45, 60);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(28, 30, 28, 30);
+        layout.setBackgroundColor(backgroundColor);
+        layout.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+
+        TextView title = new TextView(this);
+        title.setText("Medix");
+        title.setTextSize(34);
+        title.setTextColor(blueColor);
+        title.setGravity(Gravity.CENTER);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("قارئ التحاليل الطبية");
+        subtitle.setTextSize(20);
+        subtitle.setTextColor(darkColor);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setPadding(0, 8, 0, 28);
+
+        TextView selectLabel = new TextView(this);
+        selectLabel.setText("اختاري نوع التحليل:");
+        selectLabel.setTextSize(17);
+        selectLabel.setTextColor(darkColor);
+
+        testSpinner = new Spinner(this);
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+            this,
+            android.R.layout.simple_spinner_item,
+            testNames
+        );
+
+        adapter.setDropDownViewResource(
+            android.R.layout.simple_spinner_dropdown_item
+        );
+
+        testSpinner.setAdapter(adapter);
+
+        TextView valueLabel = new TextView(this);
+        valueLabel.setText("أدخلي نتيجة التحليل:");
+        valueLabel.setTextSize(17);
+        valueLabel.setTextColor(darkColor);
+        valueLabel.setPadding(0, 22, 0, 5);
+
+        resultInput = new EditText(this);
+        resultInput.setHint("مثال: 95 أو 12.5");
+        resultInput.setTextSize(18);
+        resultInput.setSingleLine(true);
+        resultInput.setInputType(
+            android.text.InputType.TYPE_CLASS_NUMBER
+            | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        );
+
+        Button analyzeButton = new Button(this);
+        analyzeButton.setText("تحليل النتيجة");
+        analyzeButton.setTextSize(18);
+        analyzeButton.setTextColor(Color.WHITE);
+        analyzeButton.setBackgroundTintList(
+            android.content.res.ColorStateList.valueOf(blueColor)
+        );
+
+        reportText = new TextView(this);
+        reportText.setText("ستظهر نتيجة التحليل هنا.");
+        reportText.setTextSize(17);
+        reportText.setTextColor(darkColor);
+        reportText.setPadding(18, 22, 18, 22);
+        reportText.setBackgroundColor(Color.WHITE);
+        reportText.setGravity(Gravity.RIGHT);
+        reportText.setTextDirection(View.TEXT_DIRECTION_RTL);
+
+        TextView warning = new TextView(this);
+        warning.setText(
+            "تنبيه: النتائج إرشادية فقط، ويجب تفسيرها " +
+            "حسب مرجع المختبر وبواسطة مختص."
+        );
+        warning.setTextSize(13);
+        warning.setTextColor(Color.DKGRAY);
+        warning.setPadding(0, 22, 0, 10);
+        warning.setGravity(Gravity.CENTER);
+
+        layout.addView(title, matchWidth());
+        layout.addView(subtitle, matchWidth());
+        layout.addView(selectLabel, matchWidth());
+
+        layout.addView(testSpinner, matchWidth());
+        layout.addView(valueLabel, matchWidth());
+        layout.addView(resultInput, matchWidth());
+
+        LinearLayout.LayoutParams buttonParams = matchWidth();
+        buttonParams.setMargins(0, 20, 0, 20);
+        layout.addView(analyzeButton, buttonParams);
+
+        layout.addView(reportText, matchWidth());
+        layout.addView(warning, matchWidth());
+
+        scrollView.addView(layout);
+        setContentView(scrollView);
+
+        analyzeButton.setOnClickListener(v -> analyzeResult());
+    }
+
+    private LinearLayout.LayoutParams matchWidth() {
+        return new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+    }
+
+    private void analyzeResult() {
+
+        String input = resultInput.getText().toString().trim();
+
+        if (input.isEmpty()) {
+            resultInput.setError("أدخلي نتيجة التحليل أولاً");
+            return;
+        }
+
+        input = input.replace(',', '.');
+
+        double value;
+
+        try {
+            value = Double.parseDouble(input);
+        } catch (NumberFormatException e) {
+            Toast.makeText(
+                this,
+                "أدخلي رقماً صحيحاً",
+                Toast.LENGTH_SHORT
+            ).show();
+            return;
+        }
+
+        if (Double.isNaN(value)
+                || Double.isInfinite(value)
+                || value < 0) {
+            resultInput.setError("أدخلي قيمة موجبة أو صفراً");
+            return;
+        }
+
+        int index = testSpinner.getSelectedItemPosition();
+
+        String status;
+
+        if (value < minimum[index]) {
+            status = "أقل من المدى المرجعي";
+        } else if (value > maximum[index]) {
+            status = "أعلى من المدى المرجعي";
         } else {
-            System.out.println("التصنيف: ضمن المدى المرجعي");
+            status = "ضمن المدى المرجعي";
         }
 
-        System.out.println(
-                "ملاحظة: تُفسر النتيجة حسب مرجع المختبر "
-                + "والحالة الصحية بواسطة مختص.");
+        String report =
+            "تقرير التحليل الطبي\n\n"
+            + "اسم الفحص: " + testNames[index] + "\n\n"
+            + "النتيجة: "
+            + String.format(Locale.US, "%s", value)
+            + " " + units[index] + "\n\n"
+            + "المدى المرجعي المستخدم: "
+            + minimum[index] + " - "
+            + maximum[index] + " " + units[index]
+            + "\n\n"
+            + "التصنيف: " + status;
 
-        System.out.println("==============================");
+        reportText.setText(report);
     }
 }

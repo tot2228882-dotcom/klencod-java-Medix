@@ -1,4 +1,4 @@
-# Medix
+# medix
 
 مشروع Android Java أُنشئ بـ KlencodIDE.
 
